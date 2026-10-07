@@ -21,6 +21,10 @@
       confirmNote: 'Anything Claude should know first? (optional)', yes: 'Yes, do it',
       sentNext: 'Locked. Back in Claude, type: ', sentOfficial: 'Locked. Back in Claude, type: ',
       cmdNext: 'next round', cmdOfficial: 'make it official',
+      sending: 'Sending to Claude...', autoNext: 'Sent to Claude. Round {n} is being built, this page will update by itself in a few minutes.',
+      autoOfficial: 'Sent to Claude. The official version is being built, the link will appear here.',
+      autoFail: 'Could not reach Claude from here. Back in Claude, type: ',
+      msgNext: 'Brainstorm round {r} locked: build round {n} (next round).', msgOfficial: 'Brainstorm round {r} locked: make it the official version.', msgNote: 'My note: ',
       inboxPh: 'A new idea popped up? Drop it here.', inboxAdd: 'Add idea', inboxAdded: 'Added. It goes into the next round.',
       settled: 'Sure', leaning: 'Leaning', answeredNoConf: 'Answered, not rated', unsure: 'Unsure', openN: 'Open', of: ' of ', answeredN: ' answered',
       up: 'Move up', down: 'Move down', addItem: 'Missing one? Add it', add: 'Add', rate: 'Rate ', stars: ' out of 5',
@@ -42,6 +46,10 @@
       confirmNote: 'Quelque chose que Claude doit savoir avant? (optionnel)', yes: 'Oui, on y va',
       sentNext: 'Verrouillé. Dans Claude, écris : ', sentOfficial: 'Verrouillé. Dans Claude, écris : ',
       cmdNext: 'tour suivant', cmdOfficial: 'version officielle',
+      sending: 'Envoi à Claude...', autoNext: 'Envoyé à Claude. Le tour {n} se prépare, cette page se mettra à jour toute seule d’ici quelques minutes.',
+      autoOfficial: 'Envoyé à Claude. La version officielle se prépare, le lien apparaîtra ici.',
+      autoFail: 'Impossible de joindre Claude d’ici. Dans Claude, écris : ',
+      msgNext: 'Brainstorm tour {r} verrouillé : construire le tour {n} (tour suivant).', msgOfficial: 'Brainstorm tour {r} verrouillé : en faire la version officielle.', msgNote: 'Ma note : ',
       inboxPh: 'Une nouvelle idée? Dépose-la ici.', inboxAdd: 'Ajouter', inboxAdded: 'Ajoutée. Elle sera dans le prochain tour.',
       settled: 'Sûr', leaning: 'Penchant', answeredNoConf: 'Répondu, non évalué', unsure: 'Incertain', openN: 'Ouvert', of: ' sur ', answeredN: ' répondues',
       up: 'Monter', down: 'Descendre', addItem: 'Il en manque un? Ajoute-le', add: 'Ajouter', rate: 'Noter ', stars: ' sur 5',
@@ -49,7 +57,7 @@
     }
   };
 
-  var cfg, t, db = null, sample = null, mode = 'connecting', state = {}, inboxLocal = [], firstSnap = true, Q = {}, queues = {}, timers = {};
+  var cfg, t, db = null, sample = null, comments = null, canSend = 'off', mode = 'connecting', state = {}, inboxLocal = [], firstSnap = true, Q = {}, queues = {}, timers = {};
   var LS_KEY;
 
   /* ---------- helpers ---------- */
@@ -401,15 +409,25 @@
       var done = el('p', 'bs-done'); done.hidden = true; done.setAttribute('aria-live', 'polite'); host.appendChild(done);
       function ask(action) {
         conf.textContent = ''; conf.hidden = false; done.hidden = true;
+        if (comments) comments.canSendToClaude().then(function (v) { canSend = v; }, function () { canSend = 'off'; });
         conf.appendChild(el('p', 'bs-done', action === 'next' ? t.confirmNext.replace('{n}', cfg.round + 1) : t.confirmOfficial));
         var f = el('div', 'bs-field'), l = el('label', null, t.confirmNote), ta = document.createElement('textarea');
         ta.className = 'bs-ta'; ta.rows = 2; ta.id = 'bs-roundnote-' + action; l.htmlFor = ta.id; f.appendChild(l); f.appendChild(ta); conf.appendChild(f);
         var row = el('div', 'bs-actions'), y = el('button', 'bs-btn solid', t.yes), n = el('button', 'bs-btn', t.cancel); y.type = n.type = 'button';
         n.addEventListener('click', function () { conf.hidden = true; });
         y.addEventListener('click', function () {
-          persist('control/r' + cfg.round, { round: cfg.round, action: action, note: ta.value.slice(0, 2000), at: now() });
-          conf.hidden = true; done.hidden = false; done.textContent = action === 'next' ? t.sentNext : t.sentOfficial;
-          done.appendChild(el('code', null, action === 'next' ? t.cmdNext : t.cmdOfficial));
+          var note = ta.value.slice(0, 2000);
+          persist('control/r' + cfg.round, { round: cfg.round, action: action, note: note, at: now() });
+          conf.hidden = true; done.hidden = false;
+          function manual(prefix) { done.textContent = prefix; done.appendChild(el('code', null, action === 'next' ? t.cmdNext : t.cmdOfficial)); }
+          if (!comments || canSend !== 'available') { manual(action === 'next' ? t.sentNext : t.sentOfficial); return; }
+          // Wake the Claude session watching this page: post a comment and send it to Claude (must run inside this click).
+          var msg = (action === 'next' ? t.msgNext : t.msgOfficial).replace('{r}', cfg.round).replace('{n}', cfg.round + 1)
+            + ' [bs:' + action + ':r' + cfg.round + ']' + (note.trim() ? '\n' + t.msgNote + note.trim() : '');
+          done.textContent = t.sending; bn.disabled = bo.disabled = true;
+          comments.anchorFor(host).then(function (anchor) { return comments.sendToClaude({ anchor: anchor, text: msg }); }).then(function () {
+            done.textContent = (action === 'next' ? t.autoNext : t.autoOfficial).replace('{n}', cfg.round + 1);
+          }, function () { bn.disabled = bo.disabled = false; manual(t.autoFail); });
         });
         row.appendChild(y); row.appendChild(n); conf.appendChild(row); ta.focus();
       }
@@ -462,6 +480,7 @@
       }, function () { });
       setStatus('saved');
     }, function () { mode = 'local'; setStatus('local'); });
+    if (cfg.autoSend !== false) c.use('comments').then(function (cm) { if (cm && typeof cm.sendToClaude === 'function') { comments = cm; cm.canSendToClaude().then(function (v) { canSend = v; }, function () { }); } }, function () { });
     if (cfg.ask !== false) c.use('sample').then(function (s) { if (s) { sample = s; $$('[data-bs-ask]').forEach(function (n) { n.hidden = false; }); } }, function () { });
   }
 

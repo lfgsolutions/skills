@@ -86,7 +86,7 @@ Data from earlier rounds stays in the store. When building round N+1, write thei
 
 ## Publishing
 
-- `capabilities: {db:{}, user:{}, sample:{}}` on the first publish; omit `capabilities` on later rounds so they carry forward.
+- `capabilities: {db:{}, user:{}, sample:{}, comments:{}}` on EVERY publish (a declaration replaces the stored set). `comments` lets the round bar wake Claude: it posts a comment and sends it to the Claude session watching the page (`sendToClaude`). That only works while a Claude session that published or watches the page is open; otherwise the page tells the user to type the command in Claude.
 - Same file path every round (same URL). `label: "Round N"`. `icon` only on the first publish.
 - Functional check after the first publish: one `ArtifactData list` of `answers`; if empty, write one probe doc `answers/probe` and delete it. Tell them in one line what was checked.
 - If the page shows "Saved on this device only", the store is unavailable for them: ask them to paste the "Copy my answers" text.
